@@ -1,0 +1,59 @@
+{
+  "obs_title_prefix": "Windowed Projector (Source)",
+  "template_threshold": 0.92,
+  "offset_to_x0": 9,
+  "bar_length_px": 90,
+  "poll_seconds": 0.15,
+
+  "equip_below_percent": 65,
+  "unequip_above_percent": 80,
+  "cooldown_sec": 0.6,
+  "min_mana_percent_to_equip": 30,
+
+  "spells": {
+    "enabled": true,
+    "global_cooldown_sec": 0.5,
+
+    "hard_healing": {
+      "enabled": true,
+      "hotkey": "f3",
+      "hp_percent": 80,
+      "cooldown_sec": 1.0
+    },
+    "mid_healing": {
+      "enabled": true,
+      "hotkey": "f2",
+      "hp_percent": 88,
+      "cooldown_sec": 1.0
+    },
+    "light_healing": {
+      "enabled": true,
+      "hotkey": "f1",
+      "hp_percent": 91,
+      "cooldown_sec": 1.0
+    }
+  },
+
+  "potions": {
+    "enabled": true,
+
+    "hard_potion": {
+      "enabled": true,
+      "hotkey": "f5",
+      "hp_percent": 80,
+      "cooldown_sec": 1.0
+    },
+    "mid_potion": {
+      "enabled": true,
+      "hotkey": "f4",
+      "hp_percent": 88,
+      "cooldown_sec": 1.0
+    },
+    "mana_potion": {
+      "enabled": true,
+      "hotkey": "f6",
+      "mana_percent": 90,
+      "cooldown_sec": 1.0
+    }
+  }
+}

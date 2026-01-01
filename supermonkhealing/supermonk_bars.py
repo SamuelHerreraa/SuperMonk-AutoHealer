@@ -7,359 +7,323 @@ from PIL import Image
 import win32gui
 import win32ui
 import win32con
-import keyboard  # pip install keyboard
+import win32api
 
-# ============================= ARCHIVOS =============================
+# ====================== ENVÍO DE TECLAS ======================
+def send_key_f17():
+    win32api.keybd_event(0x80, 0, 0, 0)  # VK_F17 = 0x80
+    time.sleep(0.03)
+    win32api.keybd_event(0x80, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+def send_key_end():
+    win32api.keybd_event(0, 0xE04F, win32con.KEYEVENTF_SCANCODE | win32con.KEYEVENTF_EXTENDEDKEY, 0)
+    time.sleep(0.05)
+    win32api.keybd_event(0, 0xE04F, win32con.KEYEVENTF_SCANCODE | win32con.KEYEVENTF_EXTENDEDKEY | win32con.KEYEVENTF_KEYUP, 0)
+
+def send_spell_key(hotkey):
+    if hotkey.startswith("f"):
+        if hotkey == "f17":
+            send_key_f17()
+            return
+        # f1 a f12 normales
+        vk = getattr(win32con, f'VK_{hotkey.upper()}')
+        win32api.keybd_event(vk, 0, 0, 0)
+        time.sleep(0.03)
+        win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+    else:
+        # Letras o números
+        win32api.keybd_event(ord(hotkey.upper()), 0, 0, 0)
+        time.sleep(0.03)
+        win32api.keybd_event(ord(hotkey.upper()), 0, win32con.KEYEVENTF_KEYUP, 0)
+
+# ====================== CONFIG Y ARCHIVOS ======================
 ROOT = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(ROOT, "config.json")
-STATE_PATH = os.path.join(ROOT, "ui_state.json")  # coords guardadas aquí (1 solo json)
-
+CONFIG_PATH = os.path.join(ROOT, "config_ring.json")
 HEART_TEMPLATE = os.path.join(ROOT, "heart.png")
 MANA_TEMPLATE = os.path.join(ROOT, "mana.png")
 
-# ============================= CARGA CONFIG =============================
 def load_config():
     if not os.path.exists(CONFIG_PATH):
-        raise FileNotFoundError(f"No existe {CONFIG_PATH}. Crea el config.json junto al script.")
+        raise FileNotFoundError(f"No existe {CONFIG_PATH}")
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 CFG = load_config()
 
-OBS_TITLE_PREFIX = CFG.get("obs_title_prefix", "Windowed Projector (Source)")
-TIBIA_TITLE_PREFIX = CFG.get("tibia_title_prefix", "Tibia")
-THRESHOLD = float(CFG.get("template_threshold", 0.92))
+# General
+OBS_TITLE_PREFIX = CFG["obs_title_prefix"]
+THRESHOLD = CFG["template_threshold"]
+OFFSET_TO_X0 = CFG["offset_to_x0"]
+BAR_LENGTH_PX = CFG["bar_length_px"]
+POLL_SECONDS = CFG["poll_seconds"]
 
-OFFSET_TO_X0 = int(CFG.get("offset_to_x0", 9))
-BAR_LENGTH_PX = int(CFG.get("bar_length_px", 90))
+# Ring
+EQUIP_BELOW = CFG.get("equip_below_percent", 60)
+UNEQUIP_ABOVE = CFG.get("unequip_above_percent", 85)
+RING_COOLDOWN = CFG.get("cooldown_sec", 0.6)
+MIN_MANA_TO_EQUIP = CFG.get("min_mana_percent_to_equip", 30)
 
-POLL_SECONDS = float(CFG.get("poll_seconds", 0.12))
+# Spells
+SPELLS_CFG = CFG.get("spells", {})
+SPELLS_ENABLED = SPELLS_CFG.get("enabled", True)
+SPELLS_GLOBAL_CD = SPELLS_CFG.get("global_cooldown_sec", 0.5)
 
-SPELLS_GLOBAL_COOLDOWN = float(CFG.get("spells_global_cooldown_sec", 0.6))  # 600ms
-HP_CFG = CFG["hp"]
-MANA_CFG = CFG.get("mana_potion", {})
+HARD_CFG = SPELLS_CFG.get("hard_healing", {})
+MID_CFG = SPELLS_CFG.get("mid_healing", {})
+LIGHT_CFG = SPELLS_CFG.get("light_healing", {})
 
-# ============================= ESTADO EN MEMORIA =============================
-state = {
-    "hp": {
-        "center_rel": None,  # (cx, cy)
-        "x0_rel": None,
-        "y_bar": None,
-    },
-    "mana": {
-        "center_rel": None,
-        "x0_rel": None,
-        "y_bar": None,
-    }
-}
+# Potions (AÑADIDO: esto faltaba)
+POTIONS_CFG = CFG.get("potions", {})
+POTIONS_ENABLED = POTIONS_CFG.get("enabled", True)
 
+HARD_POTION_CFG = POTIONS_CFG.get("hard_potion", {})
+MID_POTION_CFG = POTIONS_CFG.get("mid_potion", {})
+MANA_POTION_CFG = POTIONS_CFG.get("mana_potion", {})
+
+# Estado
+_last_ring_ts = 0.0
 _last_spell_ts = 0.0
-_last_potion_ts = 0.0
-_last_sent_rule = {r["name"]: 0.0 for r in HP_CFG.get("rules", [])}
+_last_hard_ts = 0.0
+_last_mid_ts = 0.0
+_last_light_ts = 0.0
 
-# ============================= UTILIDADES VENTANAS =============================
-def find_window_by_prefix(prefix: str):
+hp_x0 = hp_y = mana_x0 = mana_y = None
+
+RING_SLOT_X = 1767
+RING_SLOT_Y = 224
+ENERGY_RING_COLOR = (145, 255, 248)
+RING_TOLERANCE = 20
+
+# ====================== DETECCIÓN ======================
+def find_obs_window():
     found = None
-    def cb(hwnd, _):
+    def enum_cb(hwnd, _):
         nonlocal found
-        if not found and win32gui.IsWindowVisible(hwnd):
-            title = win32gui.GetWindowText(hwnd) or ""
-            if title.startswith(prefix):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd)
+            if title.startswith(OBS_TITLE_PREFIX):
                 found = hwnd
-    win32gui.EnumWindows(cb, None)
+    win32gui.EnumWindows(enum_cb, None)
     return found
 
-def get_foreground_title() -> str:
-    hwnd = win32gui.GetForegroundWindow()
-    return win32gui.GetWindowText(hwnd) or ""
-
-def tibia_is_foreground() -> bool:
-    title = get_foreground_title()
-    return title.startswith(TIBIA_TITLE_PREFIX) or (TIBIA_TITLE_PREFIX.lower() in title.lower())
-
-# ============================= CAPTURA OBS =============================
-def capture_window_image(hwnd) -> Image.Image:
+def capture_window(hwnd):
     left, top, right, bottom = win32gui.GetWindowRect(hwnd)
     w = max(1, right - left)
     h = max(1, bottom - top)
-
-    hwnd_dc = win32gui.GetWindowDC(hwnd)
-    mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+    dc = win32gui.GetWindowDC(hwnd)
+    mfc_dc = win32ui.CreateDCFromHandle(dc)
     save_dc = mfc_dc.CreateCompatibleDC()
     bitmap = win32ui.CreateBitmap()
     bitmap.CreateCompatibleBitmap(mfc_dc, w, h)
     save_dc.SelectObject(bitmap)
-
-    try:
-        res = win32gui.PrintWindow(hwnd, save_dc.GetSafeHdc(), 0)
-        if res != 1:
-            save_dc.BitBlt((0, 0), (w, h), mfc_dc, (0, 0), win32con.SRCCOPY)
-    except:
-        save_dc.BitBlt((0, 0), (w, h), mfc_dc, (0, 0), win32con.SRCCOPY)
-
+    save_dc.BitBlt((0, 0), (w, h), mfc_dc, (0, 0), win32con.SRCCOPY)
     bmpinfo = bitmap.GetInfo()
     bmpstr = bitmap.GetBitmapBits(True)
     img = Image.frombuffer("RGB", (bmpinfo["bmWidth"], bmpinfo["bmHeight"]), bmpstr, "raw", "BGRX", 0, 1)
-
     win32gui.DeleteObject(bitmap.GetHandle())
     save_dc.DeleteDC()
     mfc_dc.DeleteDC()
-    win32gui.ReleaseDC(hwnd, hwnd_dc)
+    win32gui.ReleaseDC(hwnd, dc)
     return img
 
-def get_client_offset_and_size(hwnd):
+def crop_client_area(img_pil, hwnd):
     window_rect = win32gui.GetWindowRect(hwnd)
     client_origin = win32gui.ClientToScreen(hwnd, (0, 0))
     offset_x = client_origin[0] - window_rect[0]
     offset_y = client_origin[1] - window_rect[1]
-    client_w = win32gui.GetClientRect(hwnd)[2]
-    client_h = win32gui.GetClientRect(hwnd)[3]
-    return offset_x, offset_y, client_w, client_h
+    client_w, client_h = win32gui.GetClientRect(hwnd)[2], win32gui.GetClientRect(hwnd)[3]
+    img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+    h, w = img_cv.shape[:2]
+    return img_cv[max(0, int(offset_y)):min(h, int(offset_y + client_h)),
+                  max(0, int(offset_x)):min(w, int(offset_x + client_w))]
 
-def pil_to_cv(img_pil: Image.Image) -> np.ndarray:
-    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+def locate_bars():
+    global hp_x0, hp_y, mana_x0, mana_y
+    hwnd = find_obs_window()
+    if not hwnd: return False
+    img = capture_window(hwnd)
+    client = crop_client_area(img, hwnd)
 
-def crop_client_area(win_img_pil: Image.Image, hwnd) -> np.ndarray:
-    offset_x, offset_y, client_w, client_h = get_client_offset_and_size(hwnd)
-    win_cv = pil_to_cv(win_img_pil)
-    h, w = win_cv.shape[:2]
-    x1 = max(0, int(offset_x))
-    y1 = max(0, int(offset_y))
-    x2 = min(w, int(offset_x + client_w))
-    y2 = min(h, int(offset_y + client_h))
-    return win_cv[y1:y2, x1:x2]
-
-# ============================= JSON (1 SOLO) =============================
-def load_state():
-    if not os.path.exists(STATE_PATH):
-        return
-    try:
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # esperamos data["hp"]["center_rel"] etc
-        if isinstance(data, dict):
-            for k in ("hp", "mana"):
-                if k in data and isinstance(data[k], dict):
-                    cr = data[k].get("center_rel")
-                    if cr and "x" in cr and "y" in cr:
-                        cx, cy = int(cr["x"]), int(cr["y"])
-                        state[k]["center_rel"] = (cx, cy)
-                        state[k]["x0_rel"] = cx + OFFSET_TO_X0
-                        state[k]["y_bar"] = cy
-    except Exception as e:
-        print(f"⚠️ No pude leer {STATE_PATH}: {e}")
-
-def save_state():
-    payload = {"ts": time.time(), "hp": {}, "mana": {}}
-    for k in ("hp", "mana"):
-        c = state[k]["center_rel"]
-        if c:
-            payload[k]["center_rel"] = {"x": int(c[0]), "y": int(c[1])}
-            payload[k]["found"] = True
-    try:
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-    except Exception as e:
-        print(f"⚠️ No pude guardar {STATE_PATH}: {e}")
-
-# ============================= LOCATORS =============================
-def locate_template_once(kind: str, template_path: str):
-    """
-    kind: "hp" o "mana"
-    Busca el template en el client area del OBS projector y guarda center_rel.
-    """
-    hwnd = find_window_by_prefix(OBS_TITLE_PREFIX)
-    if not hwnd:
-        print("❌ No se encontró ventana OBS projector.")
-        return False
-
-    win_img = capture_window_image(hwnd)
-    client_bgr = crop_client_area(win_img, hwnd)
-
-    templ = cv2.imread(template_path, cv2.IMREAD_COLOR)
-    if templ is None:
-        print(f"❌ No se pudo cargar template: {template_path}")
-        return False
-
-    res = cv2.matchTemplate(client_bgr, templ, cv2.TM_CCOEFF_NORMED)
+    # Heart (HP)
+    templ = cv2.imread(HEART_TEMPLATE, cv2.IMREAD_COLOR)
+    if templ is None: return False
+    res = cv2.matchTemplate(client, templ, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-    if max_val < THRESHOLD:
-        print(f"❌ No se detectó {os.path.basename(template_path)} (score {max_val:.3f} < {THRESHOLD})")
-        return False
-
+    if max_val < THRESHOLD: return False
     th, tw = templ.shape[:2]
-    cx = max_loc[0] + tw // 2
-    cy = max_loc[1] + th // 2
+    hp_x0 = max_loc[0] + tw // 2 + OFFSET_TO_X0
+    hp_y = max_loc[1] + th // 2
 
-    state[kind]["center_rel"] = (cx, cy)
-    state[kind]["x0_rel"] = cx + OFFSET_TO_X0
-    state[kind]["y_bar"] = cy
+    # Mana (opcional)
+    mana_x0 = mana_y = None
+    if MIN_MANA_TO_EQUIP > 0 and os.path.exists(MANA_TEMPLATE):
+        templ_mana = cv2.imread(MANA_TEMPLATE, cv2.IMREAD_COLOR)
+        if templ_mana is not None:
+            res_m = cv2.matchTemplate(client, templ_mana, cv2.TM_CCOEFF_NORMED)
+            _, mv_m, _, ml_m = cv2.minMaxLoc(res_m)
+            if mv_m >= THRESHOLD:
+                tmh, tmw = templ_mana.shape[:2]
+                mana_x0 = ml_m[0] + tmw // 2 + OFFSET_TO_X0
+                mana_y = ml_m[1] + tmh // 2
 
-    print(f"✅ {kind.upper()} detectado: center_rel=({cx},{cy}) score={max_val:.3f}")
-    print(f"   ↳ Barra {kind}: x0={state[kind]['x0_rel']}  y={state[kind]['y_bar']}")
-    save_state()
+    print(f"✅ HP barra: x0={hp_x0}, y={hp_y}")
+    if mana_x0: print(f"✅ Mana barra: x0={mana_x0}, y={mana_y}")
     return True
 
-def ensure_located():
-    load_state()
-
-    if not state["hp"]["center_rel"]:
-        print("🔎 Buscando heart.png...")
-        if not locate_template_once("hp", HEART_TEMPLATE):
-            return False
-
-    if MANA_CFG.get("enabled", True) and not state["mana"]["center_rel"]:
-        print("🔎 Buscando mana.png...")
-        if not locate_template_once("mana", MANA_TEMPLATE):
-            # no es fatal si no quieres mana, pero si está enabled sí lo tratamos como necesario
-            return False
-
-    return True
-
-# ============================= PIXEL / COLOR =============================
-def get_pixel_color_at_rel(client_rgb_img, rel_x, rel_y):
-    h, w = client_rgb_img.shape[:2]
-    if 0 <= rel_x < w and 0 <= rel_y < h:
-        return tuple(map(int, client_rgb_img[rel_y, rel_x]))
+def get_pixel(client_rgb, x, y):
+    h, w = client_rgb.shape[:2]
+    if 0 <= x < w and 0 <= y < h:
+        return client_rgb[y, x]
     return None
 
-def color_is_different(color_rgb, expected_rgb, tolerance):
-    return any(abs(color_rgb[i] - expected_rgb[i]) > tolerance for i in range(3))
-
-# ============================= INPUT =============================
-def send_key(key: str):
-    keyboard.press_and_release(key)
-
-# ============================= EVALUADORES =============================
-def try_cast_best_hp_spell(client_rgb):
-    """
-    Retorna True si lanzó una spell de HP.
-    Respeta:
-      - prioridad por reglas
-      - cooldown por regla (si lo usas)
-      - cooldown global entre spells: SPELLS_GLOBAL_COOLDOWN
-    """
-    global _last_spell_ts
-
-    now = time.time()
-
-    # Cooldown global de spells (entre F1/F2/F3)
-    if (now - _last_spell_ts) < SPELLS_GLOBAL_COOLDOWN:
+def is_ring_equipped(client_rgb):
+    h, w = client_rgb.shape[:2]
+    if not (0 <= RING_SLOT_X < w and 0 <= RING_SLOT_Y < h):
         return False
+    color = client_rgb[RING_SLOT_Y, RING_SLOT_X]
+    r,g,b = int(color[0]), int(color[1]), int(color[2])
+    er,eg,eb = ENERGY_RING_COLOR
+    return all(abs(c - e) <= RING_TOLERANCE for c,e in zip((r,g,b),(er,eg,eb)))
 
-    expected = tuple(HP_CFG["expected_color_rgb"])
-    tol = int(HP_CFG.get("color_tolerance", 20))
+def is_bar_filled(pixel, expected, tol=20):
+    if pixel is None: return False
+    r,g,b = int(pixel[0]), int(pixel[1]), int(pixel[2])
+    er,eg,eb = expected
+    return all(abs(c - e) <= tol for c,e in zip((r,g,b),(er,eg,eb)))
 
-    x0 = state["hp"]["x0_rel"]
-    y = state["hp"]["y_bar"]
-    if x0 is None or y is None:
-        return False
-
-    for rule in HP_CFG.get("rules", []):  # ya viene ordenado urgente -> leve
-        name = rule["name"]
-        hp_percent = float(rule["hp_percent"])
-        hotkey = str(rule["hotkey"])
-        per_rule_cd = float(rule.get("cooldown", 0.0))
-
-        target_x = int(x0 + (BAR_LENGTH_PX * (hp_percent / 100.0)))
-        color = get_pixel_color_at_rel(client_rgb, target_x, y)
-        if color is None:
-            print(f"[{time.strftime('%H:%M:%S')}] ⚠️ HP fuera de rango: {name} x={target_x} y={y}")
-            return False
-
-        diff = color_is_different(color, expected, tol)
-        if diff:
-            # cooldown por regla (opcional)
-            if (now - _last_sent_rule.get(name, 0.0)) < per_rule_cd:
-                return False
-
-            send_key(hotkey)
-            _last_spell_ts = now
-            _last_sent_rule[name] = now
-            print(f"[{time.strftime('%H:%M:%S')}] 🩸 {name} HP<{hp_percent:.0f}% → {hotkey} (spellCD {SPELLS_GLOBAL_COOLDOWN}s)")
-            return True
-
-    return False
-
-def try_use_mana_potion(client_rgb):
-    """
-    Potion NO comparte cooldown con spells.
-    Solo respeta potion_cooldown_sec contra sí misma.
-    """
-    global _last_potion_ts
-
-    if not MANA_CFG.get("enabled", True):
-        return False
-
-    now = time.time()
-    potion_cd = float(MANA_CFG.get("potion_cooldown_sec", 1.0))
-
-    if (now - _last_potion_ts) < potion_cd:
-        return False
-
-    expected = tuple(MANA_CFG["expected_color_rgb"])
-    tol = int(MANA_CFG.get("color_tolerance", 20))
-    target_pct = float(MANA_CFG.get("target_mana_percent", 80))
-    hotkey = str(MANA_CFG.get("hotkey", "f6"))
-
-    x0 = state["mana"]["x0_rel"]
-    y = state["mana"]["y_bar"]
-    if x0 is None or y is None:
-        return False
-
-    target_x = int(x0 + (BAR_LENGTH_PX * (target_pct / 100.0)))
-    color = get_pixel_color_at_rel(client_rgb, target_x, y)
-    if color is None:
-        print(f"[{time.strftime('%H:%M:%S')}] ⚠️ MANA fuera de rango: x={target_x} y={y}")
-        return False
-
-    diff = color_is_different(color, expected, tol)
-    if diff:
-        send_key(hotkey)
-        _last_potion_ts = now
-        print(f"[{time.strftime('%H:%M:%S')}] 🧪 MANA<{target_pct:.0f}% → POTION {hotkey} (potionCD {potion_cd}s)")
-        return True
-
-    return False
-
-# ============================= LOOP PRINCIPAL =============================
-def loop_once():
-    hwnd = find_window_by_prefix(OBS_TITLE_PREFIX)
-    if not hwnd:
-        print("❌ ERROR: No se encontró ventana OBS.")
-        return
-
-    win_img = capture_window_image(hwnd)
-    client_bgr = crop_client_area(win_img, hwnd)
-    client_rgb = cv2.cvtColor(client_bgr, cv2.COLOR_BGR2RGB)
-
-    # 1) HP primero (máximo 1 spell por ciclo)
-    casted = try_cast_best_hp_spell(client_rgb)
-
-    # 2) Luego mana potion (puede salir aunque haya salido spell)
-    potted = try_use_mana_potion(client_rgb)
-
-    # (Opcional) micro-pausa si te preocupa que Windows “pierda” una tecla por pegadas
-    # if casted and potted:
-    #     time.sleep(0.01)
-
+# ====================== LOOP ======================
 if __name__ == "__main__":
-    print("=== SuperMonk HP + Mana Potion (1 script / 1 JSON) ===")
-    print(f"OBS prefix: {OBS_TITLE_PREFIX}")
-    print(f"Tibia prefix: {TIBIA_TITLE_PREFIX}")
-    print(f"Polling: {POLL_SECONDS}s | Spells global CD: {SPELLS_GLOBAL_COOLDOWN}s | Potion CD: {MANA_CFG.get('potion_cooldown_sec', 1.0)}s")
+    print("=== SuperMonk Healer: Spells + Ring + Potions ===")
+    if not locate_bars():
+        print("❌ No se detectaron las barras")
+        exit(1)
 
-    if not ensure_located():
-        print("❌ No pude localizar heart.png y/o mana.png. Verifica templates y el projector.")
-        raise SystemExit(1)
+    print(f"✅ Healing activo | Ring: ≤{EQUIP_BELOW}% / ≥{UNEQUIP_ABOVE}% (mana mín {MIN_MANA_TO_EQUIP}%)")
 
-    print("✅ Listo. Solo enviará teclas si Tibia está en foreground.\n")
+    # Timestamps para pociones
+    _last_potion_ts = 0.0
+    _last_hard_potion_ts = 0.0
+    _last_mid_potion_ts = 0.0
+    _last_mana_potion_ts = 0.0
 
     try:
         while True:
-            if tibia_is_foreground():
-                loop_once()
+            hwnd = find_obs_window()
+            if not hwnd:
+                time.sleep(0.5)
+                continue
+
+            img = capture_window(hwnd)
+            client_bgr = crop_client_area(img, hwnd)
+            client_rgb = cv2.cvtColor(client_bgr, cv2.COLOR_BGR2RGB)
+
+            now = time.time()
+
+            # === 1. HEALING SPELLS (PRIORIDAD MÁXIMA) ===
+            spell_used = False
+            if SPELLS_ENABLED and (now - _last_spell_ts) >= SPELLS_GLOBAL_CD:
+                spells = [
+                    (HARD_CFG, _last_hard_ts),
+                    (MID_CFG, _last_mid_ts),
+                    (LIGHT_CFG, _last_light_ts)
+                ]
+                for cfg, last_ts in spells:
+                    if not cfg.get("enabled", False):
+                        continue
+                    pct = cfg["hp_percent"]
+                    cd = cfg.get("cooldown_sec", 1.0)
+                    if (now - last_ts) < cd:
+                        continue
+
+                    pixel = get_pixel(client_rgb, int(hp_x0 + BAR_LENGTH_PX * (pct / 100)), hp_y)
+                    if not is_bar_filled(pixel, (211, 79, 79)):
+                        hotkey = cfg["hotkey"]
+                        send_spell_key(hotkey)
+                        ts = time.strftime('%H:%M:%S')
+                        name = "HARD" if cfg is HARD_CFG else "MID" if cfg is MID_CFG else "LIGHT"
+                        print(f"[{ts}] 🩸 {name} HEALING HP≤{pct}% → {hotkey}")
+                        if cfg is HARD_CFG: _last_hard_ts = now
+                        elif cfg is MID_CFG: _last_mid_ts = now
+                        else: _last_light_ts = now
+                        _last_spell_ts = now
+                        spell_used = True
+                        break
+
+            # === 2. ENERGY RING ===
+            ring_used = False
+            if (now - _last_ring_ts) >= RING_COOLDOWN:
+                current_equipped = is_ring_equipped(client_rgb)
+
+                low_pixel = get_pixel(client_rgb, int(hp_x0 + BAR_LENGTH_PX * (EQUIP_BELOW / 100)), hp_y)
+                high_pixel = get_pixel(client_rgb, int(hp_x0 + BAR_LENGTH_PX * (UNEQUIP_ABOVE / 100)), hp_y)
+
+                hp_low = not is_bar_filled(low_pixel, (211, 79, 79))
+                hp_high = is_bar_filled(high_pixel, (211, 79, 79))
+
+                action = None
+                if hp_low and not current_equipped:
+                    if MIN_MANA_TO_EQUIP > 0 and mana_x0:
+                        mana_pixel = get_pixel(client_rgb, int(mana_x0 + BAR_LENGTH_PX * (MIN_MANA_TO_EQUIP / 100)), mana_y)
+                        if not is_bar_filled(mana_pixel, (83, 80, 218), tol=25):
+                            ts = time.strftime('%H:%M:%S')
+                            print(f"[{ts}] ⚠️ Mana < {MIN_MANA_TO_EQUIP}% → NO EQUIPO RING")
+                            time.sleep(POLL_SECONDS)
+                            continue
+                    send_key_f17()
+                    action = f"EQUIPANDO RING (HP ≤ {EQUIP_BELOW}%)"
+                    ring_used = True
+
+                elif hp_high and current_equipped:
+                    send_key_end()
+                    action = f"DESEQUIPANDO RING (HP ≥ {UNEQUIP_ABOVE}%)"
+                    ring_used = True
+
+                if action:
+                    ts = time.strftime('%H:%M:%S')
+                    print(f"[{ts}] ⚡ {action}")
+                    _last_ring_ts = now
+
+            # === 3. POTIONS (PRIORIDAD BAJA) ===
+            if POTIONS_ENABLED and (now - _last_potion_ts) >= 1.0:
+                # Delay extra si hubo acción de ring
+                if ring_used:
+                    time.sleep(0.6)
+
+                potions = [
+                    (HARD_POTION_CFG, _last_hard_potion_ts, "ULTIMATE SPIRIT", "hp_percent"),
+                    (MID_POTION_CFG, _last_mid_potion_ts, "GREAT SPIRIT", "hp_percent"),
+                    (MANA_POTION_CFG, _last_mana_potion_ts, "MANA", "mana_percent")
+                ]
+
+                for cfg, last_ts, name, percent_key in potions:
+                    if not cfg.get("enabled", False):
+                        continue
+                    pct = cfg.get(percent_key, 90 if percent_key == "mana_percent" else 80)
+                    cd = cfg.get("cooldown_sec", 1.0)
+                    if (now - last_ts) < cd:
+                        continue
+
+                    is_mana = percent_key == "mana_percent"
+                    x0 = mana_x0 if is_mana else hp_x0
+                    y = mana_y if is_mana else hp_y
+                    expected = (83, 80, 218) if is_mana else (211, 79, 79)
+
+                    pixel = get_pixel(client_rgb, int(x0 + BAR_LENGTH_PX * (pct / 100.0)), y)
+                    if not is_bar_filled(pixel, expected, tol=25):
+                        hotkey = cfg["hotkey"]
+                        send_spell_key(hotkey)
+                        ts = time.strftime('%H:%M:%S')
+                        print(f"[{ts}] 🧪 {name} POTION ({'mana' if is_mana else 'hp'}≤{pct}%) → {hotkey}")
+                        if name == "ULTIMATE SPIRIT":
+                            _last_hard_potion_ts = now
+                        elif name == "GREAT SPIRIT":
+                            _last_mid_potion_ts = now
+                        else:
+                            _last_mana_potion_ts = now
+                        _last_potion_ts = now
+                        break
+
             time.sleep(POLL_SECONDS)
+
     except KeyboardInterrupt:
-        print("\nDetenido por el usuario.")
+        print("\n\n¡Detenido! Buena caza, monk.")
