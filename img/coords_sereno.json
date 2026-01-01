@@ -1,0 +1,38 @@
+{
+  "ts": 1767207406.1025467,
+  "found": true,
+  "score": 1.0,
+  "error": null,
+  "obs_window": {
+    "title_substring": "Windowed Projector (Source)",
+    "rect_global": {
+      "left": -8,
+      "top": -8,
+      "width": 1936,
+      "height": 1048
+    }
+  },
+  "sereno": {
+    "template": "sereno.png",
+    "top_left_rel": {
+      "x": 952,
+      "y": 11
+    },
+    "top_left_global": {
+      "x": 952,
+      "y": 34
+    },
+    "center_rel": {
+      "x": 958,
+      "y": 17
+    },
+    "center_global": {
+      "x": 958,
+      "y": 40
+    },
+    "size": {
+      "w": 13,
+      "h": 13
+    }
+  }
+}

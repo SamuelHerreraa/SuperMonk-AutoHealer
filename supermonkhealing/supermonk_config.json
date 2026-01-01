@@ -1,0 +1,76 @@
+{
+  "obs_title_prefix": "Windowed Projector (Source)",
+  "tibia_title_prefix": "Tibia",
+  "threshold": 0.92,
+  "offset_to_x0": 9,
+  "bar_length_px": 90,
+  "poll_seconds": 0.15,
+  "cooldowns": {
+    "spell_global_min_interval_sec": 0.6,
+    "potion_global_min_interval_sec": 1.0
+  },
+  "hp": {
+    "expected_color_rgb": [
+      211,
+      79,
+      79
+    ],
+    "color_tolerance": 20,
+    "heal_rules": [
+      {
+        "name": "EMERGENCY",
+        "hp_percent": 80,
+        "hotkey": "f3",
+        "cooldown_per_rule": 0.0
+      },
+      {
+        "name": "MID",
+        "hp_percent": 88,
+        "hotkey": "f2",
+        "cooldown_per_rule": 0.0
+      },
+      {
+        "name": "LIGHT",
+        "hp_percent": 95,
+        "hotkey": "f1",
+        "cooldown_per_rule": 0.0
+      }
+    ],
+    "template_file": "heart.png",
+    "anchor_cache_key": "heart"
+  },
+  "mana": {
+    "expected_color_rgb": [
+      83,
+      80,
+      218
+    ],
+    "color_tolerance": 20,
+    "spell": {
+      "enabled": true,
+      "target_percent": 80,
+      "hotkey": "f6"
+    },
+    "potion": {
+      "enabled": true,
+      "target_percent": 70,
+      "hotkey": "f7"
+    },
+    "template_file": "mana.png",
+    "anchor_cache_key": "mana"
+  },
+  "anchors": {
+    "heart": {
+      "x": 1758,
+      "y": 285,
+      "ts": 1767263669.353664,
+      "score": 1.0
+    },
+    "mana": {
+      "x": 1758,
+      "y": 298,
+      "ts": 1767263669.433352,
+      "score": 1.0
+    }
+  }
+}

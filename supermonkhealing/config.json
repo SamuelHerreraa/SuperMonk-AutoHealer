@@ -1,0 +1,32 @@
+{
+  "obs_title_prefix": "Windowed Projector (Source)",
+  "tibia_title_prefix": "Tibia",
+  "template_threshold": 0.92,
+
+  "offset_to_x0": 9,
+  "bar_length_px": 90,
+
+  "poll_seconds": 0.12,
+
+  "spells_global_cooldown_sec": 0.6,
+
+  "hp": {
+    "expected_color_rgb": [211, 79, 79],
+    "color_tolerance": 20,
+    "rules": [
+      { "name": "EMERGENCY", "hp_percent": 80, "hotkey": "f3", "cooldown": 0.0 },
+      { "name": "MID",       "hp_percent": 88, "hotkey": "f2", "cooldown": 0.0 },
+      { "name": "LIGHT",     "hp_percent": 95, "hotkey": "f1", "cooldown": 0.0 }
+    ]
+  },
+
+  "mana_potion": {
+    "enabled": true,
+    "target_mana_percent": 80,
+    "expected_color_rgb": [83, 80, 218],
+    "color_tolerance": 20,
+
+    "hotkey": "f6",
+    "potion_cooldown_sec": 1.0
+  }
+}
