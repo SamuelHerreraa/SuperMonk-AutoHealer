@@ -116,7 +116,6 @@ class HealGifOverlay:
         self._build_scene()
 
         # Click izquierdo → toggle
-        self._win.bind("<ButtonPress-1>", self._on_left_click)
         self._canvas.bind("<ButtonPress-1>", self._on_left_click)
 
         # Click derecho → arrastrar

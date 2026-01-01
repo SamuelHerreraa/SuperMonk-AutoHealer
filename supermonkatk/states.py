@@ -1,11 +1,8 @@
-# states.py
 import threading
 
-# =========================
-# STATE COMPARTIDO (thread-safe)
-# =========================
 STATE = {
-    "active": False
+    "active_hunt": False,
+    "active_boss": False,
 }
 
 state_lock = threading.Lock()

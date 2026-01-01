@@ -2,18 +2,30 @@
 import os
 import time
 import threading
+import win32gui
 from overlay_heal import HealGifOverlay
 from states import STATE, state_lock
 
-def is_foreground_title_contains(substring: str) -> bool:
+
+def is_tibia_foreground(prefix: str = "Tibia -") -> bool:
+    """
+    Devuelve True solo si la ventana en primer plano tiene el prefijo 'Tibia -'
+    """
     try:
         hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd) or ""
-        return substring.lower() in title.lower()
+        if hwnd == 0:
+            return False
+        title = win32gui.GetWindowText(hwnd)
+        return title.startswith(prefix)
     except Exception:
         return False
 
-def start_heal_overlay(tibia_prefix: str):
+
+def start_heal_overlay():
+    """
+    Inicia el overlay y devuelve el objeto overlay + la función para chequear si Tibia está al frente.
+    Ya no necesita parámetro, usa prefijo fijo "Tibia -"
+    """
     img_dir = os.path.join(os.path.dirname(__file__), "img")
     gif_path = os.path.join(img_dir, "heal.gif")
     pos_path = os.path.join(img_dir, "heal_overlay_pos.json")
@@ -29,37 +41,39 @@ def start_heal_overlay(tibia_prefix: str):
 
     overlay = HealGifOverlay(
         gif_path=gif_path,
-        x=100, y=100,
+        x=100,
+        y=100,
         scale=1.0,
         save_path=pos_path,
         on_toggle=on_click_toggle
     )
     overlay.start()
 
-    def loop():
+    def control_loop():
         last_visible = None
         last_active = None
         while True:
             with state_lock:
                 active = STATE["active"]
 
-            tibia_fg = is_foreground_title_contains(tibia_prefix)
+            tibia_in_front = is_tibia_foreground()
 
-            # Visible solo cuando Tibia está al frente
-            should_visible = tibia_fg
-            if should_visible != last_visible:
-                if should_visible:
+            # === VISIBILIDAD DEL OVERLAY ===
+            if tibia_in_front != last_visible:
+                if tibia_in_front:
                     overlay.show()
                 else:
                     overlay.hide()
-                last_visible = should_visible
+                last_visible = tibia_in_front
 
-            # Color borde
-            overlay.set_active(active)
-            last_active = active
+            # === COLOR DEL BORDE ===
+            if active != last_active:
+                overlay.set_active(active)
+                last_active = active
 
             time.sleep(0.12)
 
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
-    return overlay
+    thread = threading.Thread(target=control_loop, daemon=True)
+    thread.start()
+
+    return overlay, is_tibia_foreground  # Devuelve también la función para usarla en main.py

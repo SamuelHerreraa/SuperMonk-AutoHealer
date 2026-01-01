@@ -1,0 +1,12 @@
+{
+  "timestamp": 1767307615.9212923,
+  "boss_detected": true,
+  "confidence": 1.0,
+  "template": "exorigranpug.png",
+  "roi": {
+    "x1": 1469,
+    "y1": 716,
+    "x2": 1492,
+    "y2": 735
+  }
+}

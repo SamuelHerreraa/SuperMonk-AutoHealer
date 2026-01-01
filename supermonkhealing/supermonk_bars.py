@@ -8,6 +8,11 @@ import win32gui
 import win32ui
 import win32con
 import win32api
+import keyboard  # pip install keyboard
+import threading
+
+from states import STATE, state_lock
+from overlay_controller import start_heal_overlay
 
 # ====================== ENVÍO DE TECLAS ======================
 def send_key_f17():
@@ -21,20 +26,21 @@ def send_key_end():
     win32api.keybd_event(0, 0xE04F, win32con.KEYEVENTF_SCANCODE | win32con.KEYEVENTF_EXTENDEDKEY | win32con.KEYEVENTF_KEYUP, 0)
 
 def send_spell_key(hotkey):
-    if hotkey.startswith("f"):
-        if hotkey == "f17":
-            send_key_f17()
-            return
-        # f1 a f12 normales
-        vk = getattr(win32con, f'VK_{hotkey.upper()}')
-        win32api.keybd_event(vk, 0, 0, 0)
-        time.sleep(0.03)
-        win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
-    else:
-        # Letras o números
-        win32api.keybd_event(ord(hotkey.upper()), 0, 0, 0)
-        time.sleep(0.03)
-        win32api.keybd_event(ord(hotkey.upper()), 0, win32con.KEYEVENTF_KEYUP, 0)
+    if hotkey == "f17":
+        send_key_f17()
+        return
+    if hotkey == "end":
+        send_key_end()
+        return
+    try:
+        keyboard.press_and_release(hotkey)
+    except:
+        # Fallback manual
+        vk = getattr(win32con, f'VK_{hotkey.upper()}', None)
+        if vk:
+            win32api.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.03)
+            win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 # ====================== CONFIG Y ARCHIVOS ======================
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -50,20 +56,17 @@ def load_config():
 
 CFG = load_config()
 
-# General
 OBS_TITLE_PREFIX = CFG["obs_title_prefix"]
 THRESHOLD = CFG["template_threshold"]
 OFFSET_TO_X0 = CFG["offset_to_x0"]
 BAR_LENGTH_PX = CFG["bar_length_px"]
 POLL_SECONDS = CFG["poll_seconds"]
 
-# Ring
 EQUIP_BELOW = CFG.get("equip_below_percent", 60)
 UNEQUIP_ABOVE = CFG.get("unequip_above_percent", 85)
 RING_COOLDOWN = CFG.get("cooldown_sec", 0.6)
 MIN_MANA_TO_EQUIP = CFG.get("min_mana_percent_to_equip", 30)
 
-# Spells
 SPELLS_CFG = CFG.get("spells", {})
 SPELLS_ENABLED = SPELLS_CFG.get("enabled", True)
 SPELLS_GLOBAL_CD = SPELLS_CFG.get("global_cooldown_sec", 0.5)
@@ -72,7 +75,6 @@ HARD_CFG = SPELLS_CFG.get("hard_healing", {})
 MID_CFG = SPELLS_CFG.get("mid_healing", {})
 LIGHT_CFG = SPELLS_CFG.get("light_healing", {})
 
-# Potions (AÑADIDO: esto faltaba)
 POTIONS_CFG = CFG.get("potions", {})
 POTIONS_ENABLED = POTIONS_CFG.get("enabled", True)
 
@@ -80,12 +82,16 @@ HARD_POTION_CFG = POTIONS_CFG.get("hard_potion", {})
 MID_POTION_CFG = POTIONS_CFG.get("mid_potion", {})
 MANA_POTION_CFG = POTIONS_CFG.get("mana_potion", {})
 
-# Estado
+# Estado global
 _last_ring_ts = 0.0
 _last_spell_ts = 0.0
 _last_hard_ts = 0.0
 _last_mid_ts = 0.0
 _last_light_ts = 0.0
+_last_potion_ts = 0.0
+_last_hard_potion_ts = 0.0
+_last_mid_potion_ts = 0.0
+_last_mana_potion_ts = 0.0
 
 hp_x0 = hp_y = mana_x0 = mana_y = None
 
@@ -93,6 +99,8 @@ RING_SLOT_X = 1767
 RING_SLOT_Y = 224
 ENERGY_RING_COLOR = (145, 255, 248)
 RING_TOLERANCE = 20
+
+TIBIA_TITLE_PREFIX = "Tibia -"
 
 # ====================== DETECCIÓN ======================
 def find_obs_window():
@@ -144,7 +152,6 @@ def locate_bars():
     img = capture_window(hwnd)
     client = crop_client_area(img, hwnd)
 
-    # Heart (HP)
     templ = cv2.imread(HEART_TEMPLATE, cv2.IMREAD_COLOR)
     if templ is None: return False
     res = cv2.matchTemplate(client, templ, cv2.TM_CCOEFF_NORMED)
@@ -154,7 +161,6 @@ def locate_bars():
     hp_x0 = max_loc[0] + tw // 2 + OFFSET_TO_X0
     hp_y = max_loc[1] + th // 2
 
-    # Mana (opcional)
     mana_x0 = mana_y = None
     if MIN_MANA_TO_EQUIP > 0 and os.path.exists(MANA_TEMPLATE):
         templ_mana = cv2.imread(MANA_TEMPLATE, cv2.IMREAD_COLOR)
@@ -191,23 +197,50 @@ def is_bar_filled(pixel, expected, tol=20):
     er,eg,eb = expected
     return all(abs(c - e) <= tol for c,e in zip((r,g,b),(er,eg,eb)))
 
-# ====================== LOOP ======================
+# ====================== LOOP PRINCIPAL ======================
 if __name__ == "__main__":
-    print("=== SuperMonk Healer: Spells + Ring + Potions ===")
+    print("=== SuperMonk Healer: Spells + Ring + Potions + Overlay ===")
+
+    # Iniciar overlay y obtener función para chequear Tibia
+    overlay_result = start_heal_overlay()
+    if overlay_result is None:
+        tibia_foreground_check = lambda: False  # Fallback si no hay GIF
+    else:
+        overlay, is_tibia_foreground = overlay_result
+
+    # Hotkey global para '='
+    def toggle_with_key():
+        with state_lock:
+            STATE["active"] = not STATE["active"]
+            print(f"🎛️ HEALER ACTIVE = {STATE['active']} (tecla =)")
+
+    keyboard.add_hotkey('=', toggle_with_key)
+
     if not locate_bars():
         print("❌ No se detectaron las barras")
         exit(1)
 
-    print(f"✅ Healing activo | Ring: ≤{EQUIP_BELOW}% / ≥{UNEQUIP_ABOVE}% (mana mín {MIN_MANA_TO_EQUIP}%)")
-
-    # Timestamps para pociones
-    _last_potion_ts = 0.0
-    _last_hard_potion_ts = 0.0
-    _last_mid_potion_ts = 0.0
-    _last_mana_potion_ts = 0.0
+    print(f"✅ Healing listo | Ring: ≤{EQUIP_BELOW}% / ≥{UNEQUIP_ABOVE}%")
+    print("   → Tecla '=' o click izquierdo en overlay = activar/desactivar")
+    print("   → Solo funciona cuando Tibia está en primer plano")
+    print("   → Overlay visible solo en Tibia | Borde verde = ACTIVO\n")
 
     try:
         while True:
+            # === CHEQUEO OBLIGATORIO: Tibia debe estar en primer plano ===
+            if not is_tibia_foreground():
+                time.sleep(0.3)
+                continue
+
+            # === CHEQUEO: Healer activado por tecla o click ===
+            with state_lock:
+                active = STATE["active"]
+
+            if not active:
+                time.sleep(0.3)
+                continue
+
+            # === AHORA SÍ: EJECUTAR EL LOOP DE CURACIÓN ===
             hwnd = find_obs_window()
             if not hwnd:
                 time.sleep(0.5)
@@ -219,15 +252,15 @@ if __name__ == "__main__":
 
             now = time.time()
 
-            # === 1. HEALING SPELLS (PRIORIDAD MÁXIMA) ===
+            # === 1. HEALING SPELLS ===
             spell_used = False
             if SPELLS_ENABLED and (now - _last_spell_ts) >= SPELLS_GLOBAL_CD:
                 spells = [
-                    (HARD_CFG, _last_hard_ts),
-                    (MID_CFG, _last_mid_ts),
-                    (LIGHT_CFG, _last_light_ts)
+                    (HARD_CFG, _last_hard_ts, "HARD"),
+                    (MID_CFG, _last_mid_ts, "MID"),
+                    (LIGHT_CFG, _last_light_ts, "LIGHT")
                 ]
-                for cfg, last_ts in spells:
+                for cfg, last_ts, name in spells:
                     if not cfg.get("enabled", False):
                         continue
                     pct = cfg["hp_percent"]
@@ -240,11 +273,13 @@ if __name__ == "__main__":
                         hotkey = cfg["hotkey"]
                         send_spell_key(hotkey)
                         ts = time.strftime('%H:%M:%S')
-                        name = "HARD" if cfg is HARD_CFG else "MID" if cfg is MID_CFG else "LIGHT"
                         print(f"[{ts}] 🩸 {name} HEALING HP≤{pct}% → {hotkey}")
-                        if cfg is HARD_CFG: _last_hard_ts = now
-                        elif cfg is MID_CFG: _last_mid_ts = now
-                        else: _last_light_ts = now
+                        if name == "HARD":
+                            globals()['_last_hard_ts'] = now
+                        elif name == "MID":
+                            globals()['_last_mid_ts'] = now
+                        else:
+                            globals()['_last_light_ts'] = now
                         _last_spell_ts = now
                         spell_used = True
                         break
@@ -283,9 +318,8 @@ if __name__ == "__main__":
                     print(f"[{ts}] ⚡ {action}")
                     _last_ring_ts = now
 
-            # === 3. POTIONS (PRIORIDAD BAJA) ===
+            # === 3. POTIONS ===
             if POTIONS_ENABLED and (now - _last_potion_ts) >= 1.0:
-                # Delay extra si hubo acción de ring
                 if ring_used:
                     time.sleep(0.6)
 
@@ -315,11 +349,11 @@ if __name__ == "__main__":
                         ts = time.strftime('%H:%M:%S')
                         print(f"[{ts}] 🧪 {name} POTION ({'mana' if is_mana else 'hp'}≤{pct}%) → {hotkey}")
                         if name == "ULTIMATE SPIRIT":
-                            _last_hard_potion_ts = now
+                            globals()['_last_hard_potion_ts'] = now
                         elif name == "GREAT SPIRIT":
-                            _last_mid_potion_ts = now
+                            globals()['_last_mid_potion_ts'] = now
                         else:
-                            _last_mana_potion_ts = now
+                            globals()['_last_mana_potion_ts'] = now
                         _last_potion_ts = now
                         break
 
