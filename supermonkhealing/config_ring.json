@@ -5,8 +5,8 @@
   "bar_length_px": 90,
   "poll_seconds": 0.15,
 
-  "equip_below_percent": 65,
-  "unequip_above_percent": 80,
+  "equip_below_percent": 45,
+  "unequip_above_percent": 65,
   "cooldown_sec": 0.6,
   "min_mana_percent_to_equip": 30,
 

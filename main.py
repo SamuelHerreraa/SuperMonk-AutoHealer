@@ -1,60 +1,64 @@
-# main.py (en la carpeta raíz SuperMonk) - LANZADOR FINAL DEFINITIVO
+# main.py (raíz SuperMonk) - Lanzando Ataque + Curación + Battle Spam
+import subprocess
 import threading
 import time
-import sys
 from pathlib import Path
 
-# Ruta absoluta a la carpeta raíz del proyecto
 ROOT_DIR = Path(__file__).parent.resolve()
 
-def run_module(module_name, subfolder):
-    module_dir = ROOT_DIR / subfolder
-    if not module_dir.exists():
-        print(f"❌ Carpeta no encontrada: {module_dir}")
-        return False
+def run_attack():
+    attack_dir = ROOT_DIR / "supermonkatk"
+    if not attack_dir.exists():
+        print("❌ No se encontró la carpeta supermonkatk")
+        return
 
-    # Añadir al path para importaciones
-    sys.path.insert(0, str(module_dir))
+    print("✅ Iniciando MÓDULO ATAQUE...")
+    subprocess.Popen(["python", "main.py"], cwd=str(attack_dir))
 
-    try:
-        import importlib
-        main_mod = importlib.import_module("main")
-        if hasattr(main_mod, "main"):
-            print(f"✅ {module_name} iniciado correctamente")
-            main_mod.main()
-            return True
-        else:
-            print(f"❌ El main.py de {module_name} no tiene función 'main()'")
-    except Exception as e:
-        print(f"❌ Error al iniciar {module_name}: {e}")
-        if "start_overlays" in str(e):
-            print("   → Posible causa: archivo overlay_controller.py duplicado o incompatible en esta carpeta")
-        if "config" in str(e).lower():
-            print("   → Posible causa: falta config_ring.json o config.json en la carpeta img/")
-    finally:
-        if str(module_dir) in sys.path:
-            sys.path.remove(str(module_dir))
-    return False
+def run_healing():
+    healing_dir = ROOT_DIR / "supermonkhealing"
+    if not healing_dir.exists():
+        print("❌ No se encontró la carpeta supermonkhealing")
+        return
+
+    print("✅ Iniciando MÓDULO CURACIÓN...")
+    subprocess.Popen(["python", "main.py"], cwd=str(healing_dir))
+
+def run_battle():
+    battle_file = ROOT_DIR / "battle.py"
+    if not battle_file.exists():
+        print("❌ No se encontró battle.py en la raíz")
+        return
+
+    print("✅ Iniciando BATTLE SPAM (tecla '3' cada segundo, toggle con '4')...")
+    subprocess.Popen(["python", "battle.py"], cwd=str(ROOT_DIR))
 
 def main():
-    print("🚀 SUPERMONK COMPLETO - Iniciando todos los módulos")
-    print("   Ataque: supermonkatk")
-    print("   Curación: supermonkhealing\n")
+    print("🚀 SUPERMONK GOD MODE - Lanzando todo el arsenal")
+    print("   → supermonkatk (Ataque inteligente)")
+    print("   → supermonkhealing (Curación automática)")
+    print("   → battle.py (Spam '3' toggle con '4')\n")
 
-    # Lanzar en hilos separados
-    thread_attack = threading.Thread(target=run_module, args=("MÓDULO ATAQUE", "supermonkatk"), daemon=True)
-    thread_healing = threading.Thread(target=run_module, args=("MÓDULO CURACIÓN", "supermonkhealing"), daemon=True)
+    # Lanzar los tres módulos
+    thread_attack = threading.Thread(target=run_attack)
+    thread_healing = threading.Thread(target=run_healing)
+    thread_battle = threading.Thread(target=run_battle)
 
     thread_attack.start()
     thread_healing.start()
+    thread_battle.start()
 
-    print("⏳ Intentando cargar ambos módulos...\n")
+    print("✅ Los tres módulos lanzados en ventanas separadas.")
+    print("   → \\ y * = ataque")
+    print("   → Hotkeys del healing = curación")
+    print("   → 4 = activar/desactivar spam de '3'\n")
+    print("   → Cierra las ventanas o Ctrl+C aquí para detener todo.\n")
 
     try:
-        while thread_attack.is_alive() or thread_healing.is_alive():
+        while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n🛑 SuperMonk detenido manualmente.")
+        print("\n🛑 SuperMonk God Mode detenido. ¡Has conquistado Tibia!")
 
 if __name__ == "__main__":
     main()
